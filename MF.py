@@ -25,6 +25,7 @@ initial parameters:
 import numpy as np
 from numpy.linalg import solve
 from sklearn.metrics import mean_squared_error
+import time
 
 class ExplicitMF(object):
     def __init__(self,
@@ -113,6 +114,8 @@ class ExplicitMF(object):
             
             for i in range(n_iter):
                 #iterate through sgd w/ implicit pref
+                
+                print('current iter = ',i)
                 self.sgd_ip()        
         
     def sgd(self):
@@ -153,11 +156,18 @@ class ExplicitMF(object):
             u = self.sample_row[ind]
             i = self.sample_col[ind]
             
+            #print('sgd_ip iter',ind,' of',self.n_samples)
+            #t0 = time.clock()
             curr_sum_ipm = self.sum_ipm(u)
+            #t1 = time.clock()
+            #print('time elapsed for sum_ipm = ',t1-t0)
+            
             prediction = self.global_bias + self.user_bias[u] + self.item_bias[i] + \
                         self.item_mat[i, :].T.dot(self.user_mat[u, :] + \
                         1.0/np.sqrt(numN) * curr_sum_ipm)
             err = self.ratings[u,i]-prediction
+            
+            #print('err = ',err)
             
             #update biases
             self.user_bias[u] += self.learning_rate * \
@@ -166,6 +176,10 @@ class ExplicitMF(object):
                                 (err - self.item_bias_reg * self.item_bias[i])
                                 
             #update latent factors
+            self.extra_item_factors[i,:] += self.learning_rate * \
+                                            (1.0/np.sqrt(numN)*self.sum_err_along_items(u,curr_sum_ipm,numN) - \
+                                            self.item_reg * self.extra_item_factors[i,:])
+            
             self.user_mat[u, :] += self.learning_rate * \
                                     (err * self.item_mat[i, :] - \
                                      self.user_reg * self.user_mat[u,:])
@@ -173,10 +187,10 @@ class ExplicitMF(object):
                                     (err * (self.user_mat[u, :] + \
                                     1.0/np.sqrt(numN)*curr_sum_ipm) - \
                                      self.item_reg * self.item_mat[i,:])
-                                    
-            self.extra_item_factors[i,:] += self.learning_rate * \
-                                            1.0/np.sqrt(numN)*self.sum_err_along_items(u) - \
-                                            self.item_reg * self.extra_item_factors[i,:]
+                                            
+            #print('extra_item_factors = ',self.extra_item_factors[i,:])
+            
+            self.update_ipm(u,i)
                                     
     def predict(self):
         prediction = np.zeros((self.user_mat.shape[0],self.item_mat.shape[0]))
@@ -211,6 +225,7 @@ class ExplicitMF(object):
         prev_iter = 0
         for i in range(len(iter_list)):
             curr_iter = iter_list[i]
+            
             if i == 0:
                 self.train(curr_iter, init_flag=True, learning_rate=learning_rate)
             else:
@@ -234,37 +249,39 @@ class ExplicitMF(object):
     def build_ipm(self):
         
         #implicit preference matrix
-        self.ipm = {}
+        #self.ipm = {}
+        self.ipm = np.zeros((self.n_users,self.n_items,self.n_factors))
         
         #if user gave rating 4 or 5, the user displays preference for that movie
         for u in range(self.n_users):
             for i in range(self.n_items):
                 if self.ratings[u,i] >= 4:
-                    self.ipm[(u,i)] = np.random.random(self.n_factors)
+                    #self.ipm[(u,i)] = np.random.random(self.n_factors)
+                    self.ipm[u,i,:] = np.random.random(self.n_factors)
+                    
+    def update_ipm(self,u,i):
+        self.ipm[u,i,:] = self.extra_item_factors[i,:]
                     
     #computes sum_{j \in N(u)} x_j where N(u) is the set of items that user u implictly prefers
     def sum_ipm(self,u):
         
-        result = np.zeros(self.n_factors)
-        for key in self.ipm:
-            if key[0] == u:
-                result += self.ipm[key]
+        result = np.sum(self.ipm[u,:,:],0)
+        #print('sum_ipm = ',result)
                 
         return result
                 
     #computes the sum_{i} e_{ui}*q_i where e_{ui} is the error for user u and item i
-    def sum_err_along_items(self, u):
+    def sum_err_along_items(self, u, curr_sum_ipm, numN):
         
         result = np.zeros(self.n_factors)
         for ind in self.training_ind:
             i = self.sample_col[ind]
             
-            
-            curr_sum_ipm = self.sum_ipm(u)
             prediction = self.global_bias + self.user_bias[u] + self.item_bias[i] + \
                         self.item_mat[i, :].T.dot(self.user_mat[u, :] + \
-                        1.0/np.sqrt(len(self.ipm)) * curr_sum_ipm)
+                        1.0/np.sqrt(numN) * curr_sum_ipm)
             err = self.ratings[u,i]-prediction
+            
             result += err*self.item_mat[i,:]
             
         return result
